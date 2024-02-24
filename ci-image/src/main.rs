@@ -10,6 +10,25 @@ struct PyRequirement {
     current_version: String,
 }
 
+fn main() {
+    tracing_subscriber::fmt::init();
+    let args = make_cli().get_matches();
+    let package = args.get_one::<String>("package");
+    match package {
+        Some(p) => {
+            let db_path = std::env::var("PYPEEP_DB_PATH");
+            install_package(&p);
+            let mut table = Table::new(get_requirements());
+            table.with(Style::psql());
+            println!("{table}");
+        }
+        None => {
+            tracing::error!("failed to parse argument --package");
+            process::exit(1);
+        }
+    }
+}
+
 fn make_cli() -> clap::Command {
     tracing::debug!("initializing command");
     clap::Command::new(env!("CARGO_CRATE_NAME"))
@@ -59,23 +78,4 @@ fn get_requirements() -> Vec<PyRequirement> {
         process::exit(3);
     }
     requirements
-}
-
-fn main() {
-    tracing_subscriber::fmt::init();
-    let args = make_cli().get_matches();
-    let package = args.get_one::<String>("package");
-    match package {
-        Some(p) => {
-            let db_path = std::env::var("PYPEEP_DB_PATH");
-            install_package(&p);
-            let mut table = Table::new(get_requirements());
-            table.with(Style::psql());
-            println!("{table}");
-        }
-        None => {
-            tracing::error!("failed to parse argument --package");
-            process::exit(1);
-        }
-    }
 }
