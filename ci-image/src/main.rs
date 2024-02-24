@@ -1,19 +1,35 @@
 use std::process::Command;
 
+use tabled::{settings::Style, Table, Tabled};
+
+#[derive(Tabled)]
+struct PyRequirement<'a> {
+    id: usize,
+    name: &'a str,
+    current_version: &'a str,
+}
+
 fn main() {
     let output = Command::new("uv").args(["pip", "freeze"]).output();
-    let mut package_names = Vec::<&str>::new();
+    let mut requirements = Vec::<PyRequirement>::new();
     if let Ok(o) = output {
-        let requirements =
+        let installed =
             String::from_utf8(o.stdout).expect("Failed to convert stdout from `uv pip freeze`");
-        for requirement in requirements.split("\n") {
-            let package_name = requirement.split("==").nth(0).unwrap();
-            if package_name.is_empty() {
+        for (i, requirement) in installed.split("\n").enumerate() {
+            if requirement.is_empty() {
                 continue;
             }
-            package_names.push(package_name);
+            let mut split = requirement.split("==");
+            let (name, current_version) = (split.next().unwrap(), split.next().unwrap());
+            requirements.push(PyRequirement {
+                id: i + 1,
+                name,
+                current_version,
+            });
         }
-        dbg!(package_names);
+        let mut table = Table::new(requirements);
+        table.with(Style::psql());
+        println!("{table}");
     } else {
         panic!("oops!");
     }
