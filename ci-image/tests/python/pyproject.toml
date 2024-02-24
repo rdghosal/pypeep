@@ -1,6 +1,0 @@
-[project]
-name = "test-pkg"
-authors = [{name = "Rahul Ghosal"}]
-maintainers = [{name = "Rahul Ghosal"}]
-version = "0.1"
-dependencies = ["flask", "pydantic", "pymongo", "boto3"]
