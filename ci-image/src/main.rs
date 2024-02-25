@@ -1,5 +1,8 @@
 use clap;
+// use futures::TryStreamExt;
+use sqlx::{Row, SqliteConnection, SqlitePool};
 use std::process::{self, Command};
+use tokio;
 
 use tabled::{settings::Style, Table, Tabled};
 
@@ -10,20 +13,53 @@ struct PyRequirement {
     current_version: String,
 }
 
-fn main() {
+struct Config {
+    db_uri: String,
+}
+
+#[tokio::main]
+async fn main() {
     tracing_subscriber::fmt::init();
     let args = make_cli().get_matches();
     let package = args.get_one::<String>("package");
     match package {
         Some(p) => {
-            let db_path = std::env::var("PYPEEP_DB_PATH");
             install_package(&p);
-            let mut table = Table::new(get_requirements());
+            let config = get_config();
+            let requirements = get_requirements();
+            let pool = SqlitePool::connect(&config.db_uri).await;
+            if pool.is_err() {
+                process::exit(1);
+            }
+            // let rows = sqlx::query("SELECT * FROM requirements")
+            //     .fetch_all(&pool.unwrap())
+            //     .await;
+            // if let Ok(ref r) = rows {
+            //     for rr in r {
+            //         let v: &str = rr.try_get("name").unwrap();
+            //         println!("{v}");
+            //     }
+            //     // map the row into a user-defined domain type
+            // }
+            let mut table = Table::new(requirements);
             table.with(Style::psql());
             println!("{table}");
         }
         None => {
             tracing::error!("failed to parse argument --package");
+            process::exit(1);
+        }
+    }
+}
+
+fn get_config() -> Config {
+    match std::env::var("PYPEEP_DB_PATH") {
+        Ok(db_uri) => {
+            tracing::info!("setting config");
+            Config { db_uri }
+        }
+        _ => {
+            tracing::error!("failed to retrieve configuration");
             process::exit(1);
         }
     }
