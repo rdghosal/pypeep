@@ -1,12 +1,12 @@
-use clap;
-use sqlx::{Pool, Sqlite, SqlitePool};
 use std::{
     env::VarError,
-    io::{self, Error},
     process::{self, Command},
 };
 use tabled::{settings::Style, Table, Tabled};
 use tokio;
+
+use pypeep::cli::*;
+use pypeep::db::*;
 
 #[derive(Tabled)]
 struct PyRequirement {
@@ -32,34 +32,57 @@ async fn main() {
     let args = make_cli().get_matches();
     let package = args.get_one::<String>("package");
     match package {
+        None => {
+            tracing::error!("failed to parse argument --package");
+            process::exit(1);
+        }
         Some(p) => {
-            let config = match Config::from_env() {
-                Ok(c) => c,
-                _ => {
-                    tracing::error!("failed to load configuration");
-                    process::exit(1);
-                }
+            let Ok(config) = Config::from_env() else {
+                tracing::error!("failed to load configuration");
+                process::exit(2);
             };
-            let pool = match get_db_pool(&config.db_uri).await {
-                Ok(p) => p,
-                _ => {
-                    tracing::error!("failed to load configuration");
-                    process::exit(2);
-                }
+            let Ok(pool) = get_db_pool(&config.db_uri).await else {
+                tracing::error!("failed to connect to database");
+                process::exit(3);
             };
-            install_package(p);
-            let requirements = get_requirements();
-            update_projects(p, &pool).await;
+            if install_package(p).is_err() {
+                tracing::error!("failed to install package {}", &p);
+                process::exit(4);
+            }
+            let Ok(requirements) = get_requirements() else {
+                tracing::error!("failed to parse requirements for package {}", &p);
+                process::exit(5);
+            };
+            if update_projects(p, &pool).await.is_err() {
+                tracing::error!("failed to update [projects] {}", &p);
+                process::exit(6);
+            }
             for requirement in &requirements {
-                update_requirements(&requirement.name, &pool).await;
-                update_project_requirements(
+                if update_requirements(&requirement.name, &pool).await.is_err() {
+                    tracing::error!(
+                        "failed to update [requirements] for {}.{}",
+                        &p,
+                        &requirement.name
+                    );
+                    process::exit(6);
+                }
+                let res = update_project_requirements(
                     p,
                     &requirement.name,
                     &requirement.current_version,
                     &pool,
                 )
                 .await;
+                if res.is_err() {
+                    tracing::error!(
+                        "failed to update [project_requirements] for {}.{}",
+                        &p,
+                        &requirement.name
+                    );
+                    process::exit(6);
+                }
             }
+            println!();
             println!(
                 "Recorded the current version of {} requirements for {} as follows:",
                 &requirements.len(),
@@ -69,108 +92,32 @@ async fn main() {
             table.with(Style::psql());
             println!("{table}");
         }
-        None => {
-            tracing::error!("failed to parse argument --package");
-            process::exit(1);
-        }
     }
 }
 
-fn make_cli() -> clap::Command {
-    tracing::debug!("initializing command");
-    clap::Command::new(env!("CARGO_CRATE_NAME"))
-        .about("Downloads a specified Python package and stores information about the current state of its dependencies.")
-        .arg(
-            clap::Arg::new("package")
-                .long("package")
-                .help("The Python package whose requirements (i.e., dependencies) we are checking.")
-                .required(true),
-        )
-}
-
-async fn get_db_pool(db_uri: &String) -> Result<Pool<Sqlite>, sqlx::Error> {
-    let pool = SqlitePool::connect(db_uri).await?;
-    Ok(pool)
-}
-
-fn install_package(package: &String) {
+fn install_package(package: &String) -> Result<(), std::io::Error> {
     tracing::info!("installing {}", package);
-    let status = Command::new("uv")
+    let _ = Command::new("uv")
         .args(["pip", "install", package])
-        .status();
-    if let Err(_) = status {
-        tracing::error!("failed to install package {package}");
-        process::exit(2);
-    }
+        .status()?;
+    Ok(())
 }
 
-fn get_requirements() -> Vec<PyRequirement> {
-    let uv_freeze = Command::new("uv").args(["pip", "freeze"]).output();
+fn get_requirements() -> Result<Vec<PyRequirement>, Box<dyn std::error::Error>> {
+    let uv_freeze = Command::new("uv").args(["pip", "freeze"]).output()?;
     let mut requirements = Vec::<PyRequirement>::new();
-    if let Ok(o) = uv_freeze {
-        let installed = String::from_utf8(o.stdout);
-        if let Err(_) = installed {
-            tracing::error!("failed to convert stdout from `uv pip freeze`");
-            process::exit(4);
+    let installed = String::from_utf8(uv_freeze.stdout)?;
+    for (i, requirement) in installed.split("\n").enumerate() {
+        if requirement.is_empty() {
+            continue;
         }
-        for (i, requirement) in installed.unwrap().split("\n").enumerate() {
-            if requirement.is_empty() {
-                continue;
-            }
-            let mut split = requirement.split("==");
-            let (name, current_version) = (split.next().unwrap(), split.next().unwrap());
-            requirements.push(PyRequirement {
-                id: i + 1,
-                name: name.to_string(),
-                current_version: current_version.to_string(),
-            });
-        }
-    } else {
-        tracing::error!("failed to parse package requirements");
-        process::exit(3);
+        let mut split = requirement.split("==");
+        let (name, current_version) = (split.next().unwrap(), split.next().unwrap());
+        requirements.push(PyRequirement {
+            id: i + 1,
+            name: name.to_string(),
+            current_version: current_version.to_string(),
+        });
     }
-    requirements
-}
-
-async fn update_projects(project: &String, pool: &SqlitePool) {
-    tracing::info!("inserting {} into [projects]", project);
-    let _ = sqlx::query("INSERT OR IGNORE INTO projects(name) VALUES (?)")
-        .bind(project)
-        .execute(pool)
-        .await
-        .unwrap();
-}
-
-async fn update_requirements(requirement: &String, pool: &SqlitePool) {
-    tracing::info!("inserting {} into [requirements]", requirement);
-    let _ = sqlx::query("INSERT OR IGNORE INTO requirements(name) VALUES (?)")
-        .bind(requirement)
-        .execute(pool)
-        .await
-        .unwrap();
-}
-
-async fn update_project_requirements(
-    project: &String,
-    requirement: &String,
-    requirement_version: &String,
-    pool: &SqlitePool,
-) {
-    tracing::info!(
-        "inserting {}@{} into [projects_requirements]",
-        &requirement,
-        &requirement_version
-    );
-    let _ = sqlx::query(
-        "INSERT INTO project_requirements(project_name, requirement, current_version) \
-            VALUES (?, ?, ?) ON CONFLICT(project_name, requirement) \
-            DO UPDATE SET current_version = ?, updated_at = CURRENT_TIMESTAMP",
-    )
-    .bind(project)
-    .bind(requirement)
-    .bind(requirement_version)
-    .bind(requirement_version)
-    .execute(pool)
-    .await
-    .unwrap();
+    Ok(requirements)
 }
