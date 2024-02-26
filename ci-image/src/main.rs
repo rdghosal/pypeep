@@ -1,6 +1,10 @@
 use clap;
-use sqlx::SqlitePool;
-use std::process::{self, Command};
+use sqlx::{Pool, Sqlite, SqlitePool};
+use std::{
+    env::VarError,
+    io::{self, Error},
+    process::{self, Command},
+};
 use tabled::{settings::Style, Table, Tabled};
 use tokio;
 
@@ -15,6 +19,13 @@ struct Config {
     db_uri: String,
 }
 
+impl Config {
+    fn from_env() -> Result<Self, VarError> {
+        let db_uri = std::env::var("PYPEEP_DB_PATH")?;
+        Ok(Self { db_uri })
+    }
+}
+
 #[tokio::main]
 async fn main() {
     tracing_subscriber::fmt::init();
@@ -22,14 +33,22 @@ async fn main() {
     let package = args.get_one::<String>("package");
     match package {
         Some(p) => {
+            let config = match Config::from_env() {
+                Ok(c) => c,
+                _ => {
+                    tracing::error!("failed to load configuration");
+                    process::exit(1);
+                }
+            };
+            let pool = match get_db_pool(&config.db_uri).await {
+                Ok(p) => p,
+                _ => {
+                    tracing::error!("failed to load configuration");
+                    process::exit(2);
+                }
+            };
             install_package(p);
-            let config = get_config();
             let requirements = get_requirements();
-            let pool = SqlitePool::connect(&config.db_uri).await;
-            if pool.is_err() {
-                process::exit(1);
-            }
-            let pool = pool.unwrap();
             update_projects(p, &pool).await;
             for requirement in &requirements {
                 update_requirements(&requirement.name, &pool).await;
@@ -57,19 +76,6 @@ async fn main() {
     }
 }
 
-fn get_config() -> Config {
-    match std::env::var("PYPEEP_DB_PATH") {
-        Ok(db_uri) => {
-            tracing::info!("loading config");
-            Config { db_uri }
-        }
-        _ => {
-            tracing::error!("failed to retrieve configuration");
-            process::exit(1);
-        }
-    }
-}
-
 fn make_cli() -> clap::Command {
     tracing::debug!("initializing command");
     clap::Command::new(env!("CARGO_CRATE_NAME"))
@@ -80,6 +86,11 @@ fn make_cli() -> clap::Command {
                 .help("The Python package whose requirements (i.e., dependencies) we are checking.")
                 .required(true),
         )
+}
+
+async fn get_db_pool(db_uri: &String) -> Result<Pool<Sqlite>, sqlx::Error> {
+    let pool = SqlitePool::connect(db_uri).await?;
+    Ok(pool)
 }
 
 fn install_package(package: &String) {
