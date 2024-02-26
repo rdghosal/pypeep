@@ -8,7 +8,7 @@ DROP_PROJECTS = "DROP TABLE IF EXISTS projects;"
 CREATE_PROJECTS = """
     CREATE TABLE projects (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
-        name TEXT NOT NULL,
+        name TEXT UNIQUE NOT NULL,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         updated_at TIMESTAMP
         );
@@ -17,8 +17,8 @@ DROP_REQUIREMENTS = "DROP TABLE IF EXISTS requirements;"
 CREATE_REQUIREMENTS = """
     CREATE TABLE requirements (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
-        name TEXT NOT NULL,
-        current_version VARCHAR(10) NOT NULL,
+        name TEXT UNIQUE NOT NULL,
+        current_version VARCHAR(10),
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         updated_at TIMESTAMP
         );

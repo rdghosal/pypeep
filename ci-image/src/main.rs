@@ -1,10 +1,8 @@
 use clap;
-// use futures::TryStreamExt;
-use sqlx::{Row, SqliteConnection, SqlitePool};
+use sqlx::SqlitePool;
 use std::process::{self, Command};
-use tokio;
-
 use tabled::{settings::Style, Table, Tabled};
+use tokio;
 
 #[derive(Tabled)]
 struct PyRequirement {
@@ -24,23 +22,30 @@ async fn main() {
     let package = args.get_one::<String>("package");
     match package {
         Some(p) => {
-            install_package(&p);
+            install_package(p);
             let config = get_config();
             let requirements = get_requirements();
             let pool = SqlitePool::connect(&config.db_uri).await;
             if pool.is_err() {
                 process::exit(1);
             }
-            // let rows = sqlx::query("SELECT * FROM requirements")
-            //     .fetch_all(&pool.unwrap())
-            //     .await;
-            // if let Ok(ref r) = rows {
-            //     for rr in r {
-            //         let v: &str = rr.try_get("name").unwrap();
-            //         println!("{v}");
-            //     }
-            //     // map the row into a user-defined domain type
-            // }
+            let pool = pool.unwrap();
+            update_projects(p, &pool).await;
+            for requirement in &requirements {
+                update_requirements(&requirement.name, &pool).await;
+                update_project_requirements(
+                    p,
+                    &requirement.name,
+                    &requirement.current_version,
+                    &pool,
+                )
+                .await;
+            }
+            println!(
+                "Recorded the current version of {} requirements for {} as follows:",
+                &requirements.len(),
+                &p
+            );
             let mut table = Table::new(requirements);
             table.with(Style::psql());
             println!("{table}");
@@ -55,7 +60,7 @@ async fn main() {
 fn get_config() -> Config {
     match std::env::var("PYPEEP_DB_PATH") {
         Ok(db_uri) => {
-            tracing::info!("setting config");
+            tracing::info!("loading config");
             Config { db_uri }
         }
         _ => {
@@ -114,4 +119,47 @@ fn get_requirements() -> Vec<PyRequirement> {
         process::exit(3);
     }
     requirements
+}
+
+async fn update_projects(project: &String, pool: &SqlitePool) {
+    tracing::info!("inserting {} into [projects]", project);
+    let _ = sqlx::query("INSERT OR IGNORE INTO projects(name) VALUES (?)")
+        .bind(project)
+        .execute(pool)
+        .await
+        .unwrap();
+}
+
+async fn update_requirements(requirement: &String, pool: &SqlitePool) {
+    tracing::info!("inserting {} into [requirements]", requirement);
+    let _ = sqlx::query("INSERT OR IGNORE INTO requirements(name) VALUES (?)")
+        .bind(requirement)
+        .execute(pool)
+        .await
+        .unwrap();
+}
+
+async fn update_project_requirements(
+    project: &String,
+    requirement: &String,
+    requirement_version: &String,
+    pool: &SqlitePool,
+) {
+    tracing::info!(
+        "inserting {}@{} into [projects_requirements]",
+        &requirement,
+        &requirement_version
+    );
+    let _ = sqlx::query(
+        "INSERT INTO project_requirements(project_name, requirement, current_version) \
+            VALUES (?, ?, ?) ON CONFLICT(project_name, requirement) \
+            DO UPDATE SET current_version = ?, updated_at = CURRENT_TIMESTAMP",
+    )
+    .bind(project)
+    .bind(requirement)
+    .bind(requirement_version)
+    .bind(requirement_version)
+    .execute(pool)
+    .await
+    .unwrap();
 }
