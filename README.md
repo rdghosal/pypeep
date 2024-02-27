@@ -1,5 +1,5 @@
 # pypeep
-A peep into pyproject dependencies.
+> A peep into pyproject dependencies.
 
 ## I. Implementation
 
