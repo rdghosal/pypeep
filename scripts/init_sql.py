@@ -2,7 +2,7 @@
 import sqlite3
 
 
-DB_PATH = 'pypeep.db'
+DB_PATH = "pypeep.db"
 
 DROP_PROJECTS = "DROP TABLE IF EXISTS projects;"
 CREATE_PROJECTS = """

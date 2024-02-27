@@ -4,3 +4,4 @@ __pycache__
 .venv
 target
 *.egg*
+node_modules
